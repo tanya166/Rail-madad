@@ -1,0 +1,103 @@
+
+
+.container1 {
+  position: relative;
+  height: 100vh;
+  width: 100vw; 
+  display: flex;
+  background-color: #07073b;
+  justify-content: center;
+  align-items: center;
+}
+
+.train-image {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  max-width: none; /* Ensures the image height is full */
+  z-index: 1;
+}
+
+/* Content centered in the middle of the screen */
+.content1 {
+  z-index: 2;
+  text-align: center;
+  position: relative;
+  display: flex;
+  
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Input container1 for PNR and play container1 */
+.input-container1 {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+  position: relative;
+  width: 250px;
+}
+
+.pnr-input {
+  padding: 10px;
+  font-size: 16px;
+  width: 100%;
+  border: none;
+  border-bottom: 2px solid #fff; /* Underline effect */
+  background-color: transparent;
+  color: #fff;
+}
+
+.pnr-input:focus {
+  outline: none;
+  border-bottom: 2px solid #007bff; /* Focus underline color */
+}
+
+/* Small play container1 at the end of the input */
+.play-container1 {
+  position: absolute;
+  right: 10px; /* Position at the end of the input */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.play-symbol {
+  color: white;
+  font-size: 18px;
+}
+
+.status {
+  margin-top: 20px;
+  font-size: 18px;
+  color: green;
+}
+
+/* Dinosaur animation */
+.dinosaur-animation {
+  position: absolute;
+  top: 80%; /* Adjust the position to come under the form */
+  width: 100vw; /* Takes the full width of the screen */
+  height: 100px;
+  overflow: hidden;
+}
+
+.dinosaur {
+  position: absolute;
+  height: 100px;
+  animation: moveDino 3s linear forwards;
+}
+
+@keyframes moveDino {
+  0% {
+    left: -100px; /* Start the dinosaur off the screen */
+  }
+  100% {
+    left: 100vw; /* Move the dinosaur across the full width of the screen */
+  }
+}
