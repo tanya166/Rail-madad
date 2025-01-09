@@ -1,0 +1,14 @@
+/* Add this to your main CSS file (e.g., src/index.css) */
+
+@keyframes blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.blink {
+  animation: blink 2s infinite;
+}

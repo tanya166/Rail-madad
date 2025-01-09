@@ -1,0 +1,51 @@
+.madad-railmadad {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-items:center ;
+  justify-content: space-between;
+  padding: 50px;
+  background-color: #f2f2f2;
+}
+
+.logo1{
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+}
+.logo1 img{
+  width:30px;
+}
+.madad-text{
+  font-weight: 500;
+  font-size: 3rem;
+}
+
+.madad{
+  display: flex;
+  flex-direction: column;
+}
+.resources{
+  display: flex;
+  flex-direction: column;
+  padding-right: 10rem;
+}
+
+.platform {
+  margin: 1rem;
+  font-size: 14px;
+  color: #666;
+  max-width: 400px;
+}
+
+
+.links{
+  list-style: none;
+  
+}
+.links a{
+  text-decoration: none;
+  color: #666;
+
+}

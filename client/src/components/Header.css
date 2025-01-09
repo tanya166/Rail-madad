@@ -1,0 +1,98 @@
+/* Container for the header */
+header {
+    background-color: #0A2640;
+    height: 40rem;
+    padding: 50px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    overflow: hidden;
+}
+
+/* Circle Image */
+header img.circle {
+    height: 30rem;
+    width: 30rem;
+    position: absolute;
+    right: 0;
+    top: 0;
+}
+
+/* Person Image */
+header img.person {
+    margin-top: 5rem;
+    height: 30rem;
+    width: 30rem;
+    position: absolute;
+    right: 100px;
+    top: -80px;
+}
+
+/* Logos Image */
+header img.logos1 {
+    width: 30rem;
+    align-self: center;
+    margin-bottom: 0;
+    position: relative;
+    top: 6rem;
+    transform: scale(1.7);
+}
+
+/* Heading */
+/* header h1 {
+    text-align: left;
+    font-size: 2.5rem;
+    color: #333;
+    margin-bottom: 0.5rem;
+    margin-left: 3rem; /* Left margin added */
+
+
+
+header p {
+    text-align: left;
+    font-size: 1.2rem;
+    color: #555;
+    margin-bottom: 2rem;
+    margin-left: 3rem;
+    width: 40vw;
+}
+
+/* Buttons container */
+.buttons {
+    
+    display: flex;
+    gap: 1rem;
+    margin-left: 3rem; /* Left margin added */
+    background-color: transparent;
+}
+
+/* Button styles */
+Button {
+    height: 3.5rem;
+    width: 15vw;
+    padding: 0.75rem 1.5rem;
+    border: none;
+    background-color: black;
+    border-radius: 5px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all ease-in-out 0.2s;
+    color: white;
+}
+
+/* Heading and paragraph styles */
+.H1 {
+    font-size: 350%;
+    color: white;
+    margin: 3rem;
+    margin-bottom: 0;
+}
+
+.T1 {
+    color: white;
+    
+}
+Button:hover {
+    transform: scale(1.02);
+}
