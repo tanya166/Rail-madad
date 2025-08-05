@@ -28,7 +28,7 @@ app.use(express.json());
 app.use('/', complaintRoute);
 app.use('/', adminRoute);
 
-app.get('/', () => {
+app.get('/', (req, res) => {
     res.send('Hello World!');
 });
 
