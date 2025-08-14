@@ -1,34 +1,88 @@
 import axios from 'axios';
 import admin from '../config/firebase.js';
 import dotenv from 'dotenv';
-import { v4 as uuidv4 } from 'uuid'; 
+import { v4 as uuidv4 } from 'uuid';
+import { pipeline, env } from '@huggingface/transformers';
 
 dotenv.config();
 
 const API_URL = process.env.HUGGING_FACE_API_URL;
 const API_KEY = process.env.HUGGING_FACE_API_KEY;
-
 const bucketName = process.env.GCS_BUCKET_NAME;
 
-async function queryImageCaption(imageData) {
+// Configure transformers to use local models
+env.allowLocalModels = false;
+env.allowRemoteModels = true;
+
+let captioner;
+
+// Initialize the pipeline once
+const initializeCaptioner = async () => {
+    if (!captioner) {
+        try {
+            console.log('Initializing image captioning pipeline...');
+            captioner = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning');
+            console.log('Image captioning pipeline initialized successfully');
+        } catch (error) {
+            console.error('Error initializing captioner:', error);
+            throw error;
+        }
+    }
+    return captioner;
+};
+
+async function queryImageCaption(imageBuffer) {
     try {
-        const response = await axios.post(API_URL, imageData, {
-            headers: {
-                'Authorization': API_KEY,
-                'Content-Type': 'application/octet-stream',
-            },
-        });
-
-        console.log('Hugging Face API Response:', response.data);
-
-        if (response.data && response.data.length > 0 && response.data[0].generated_text) {
-            return response.data[0].generated_text;
+        console.log('Attempting local image captioning...');
+        
+        // Initialize captioner if not already done
+        const caption = await initializeCaptioner();
+        
+        console.log('Generating caption...');
+        console.log('Image buffer type:', typeof imageBuffer);
+        console.log('Image buffer constructor:', imageBuffer.constructor.name);
+        console.log('Image buffer length:', imageBuffer.length);
+        
+        // Convert Buffer to Uint8Array if needed
+        const imageArray = imageBuffer instanceof Buffer ? new Uint8Array(imageBuffer) : imageBuffer;
+        
+        // Generate caption using the pipeline
+        const result = await caption(imageArray);
+        
+        console.log('Caption result:', result);
+        
+        if (result && result[0] && result[0].generated_text) {
+            console.log('Generated caption:', result[0].generated_text);
+            return result[0].generated_text;
         } else {
-            throw new Error('Invalid response format');
+            throw new Error('Invalid caption result format');
         }
     } catch (error) {
-        console.error('Error querying image caption:', error);
-        throw error;
+        console.error('Error generating image caption:', error);
+        
+        // Fallback to Hugging Face API if local fails
+        if (API_URL && API_KEY) {
+            console.log('Falling back to Hugging Face API...');
+            try {
+                const response = await axios.post(API_URL, imageBuffer, {
+                    headers: {
+                        'Authorization': API_KEY,
+                        'Content-Type': 'application/octet-stream',
+                    },
+                });
+
+                console.log('Hugging Face API Response:', response.data);
+
+                if (response.data && response.data.length > 0 && response.data[0].generated_text) {
+                    return response.data[0].generated_text;
+                }
+            } catch (apiError) {
+                console.error('Hugging Face API also failed:', apiError);
+            }
+        }
+        
+        // Return fallback message
+        return "Unable to generate image caption at this time";
     }
 }
 
@@ -72,11 +126,13 @@ export const submitPNR = async (req, res) => {
 
         console.log('Received PNR:', pnr);
         console.log('Image provided in the request');
+        console.log('Image mimetype:', image.mimetype);
+        console.log('Image size:', image.size);
 
         const imageUrl = await uploadImageToBucket(image);
         const queryGenerated = await queryImageCaption(image.buffer);
 
-        const complaintId = uuidv4(); // Generate a unique ID for the complaint
+        const complaintId = uuidv4();
 
         const complaintData = {
             id: complaintId,
