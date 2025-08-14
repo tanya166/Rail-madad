@@ -2,7 +2,6 @@ import axios from 'axios';
 import admin from '../config/firebase.js';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
-import { pipeline, env } from '@huggingface/transformers';
 
 dotenv.config();
 
@@ -10,78 +9,62 @@ const API_URL = process.env.HUGGING_FACE_API_URL;
 const API_KEY = process.env.HUGGING_FACE_API_KEY;
 const bucketName = process.env.GCS_BUCKET_NAME;
 
-// Configure transformers to use local models
-env.allowLocalModels = false;
-env.allowRemoteModels = true;
-
-let captioner;
-
-// Initialize the pipeline once
-const initializeCaptioner = async () => {
-    if (!captioner) {
-        try {
-            console.log('Initializing image captioning pipeline...');
-            captioner = await pipeline('image-to-text', 'Xenova/vit-gpt2-image-captioning');
-            console.log('Image captioning pipeline initialized successfully');
-        } catch (error) {
-            console.error('Error initializing captioner:', error);
-            throw error;
-        }
-    }
-    return captioner;
-};
-
 async function queryImageCaption(imageBuffer) {
     try {
-        console.log('Attempting local image captioning...');
+        console.log('Attempting to generate image caption...');
         
-        // Initialize captioner if not already done
-        const caption = await initializeCaptioner();
-        
-        console.log('Generating caption...');
-        console.log('Image buffer type:', typeof imageBuffer);
-        console.log('Image buffer constructor:', imageBuffer.constructor.name);
-        console.log('Image buffer length:', imageBuffer.length);
-        
-        // Convert Buffer to Uint8Array if needed
-        const imageArray = imageBuffer instanceof Buffer ? new Uint8Array(imageBuffer) : imageBuffer;
-        
-        // Generate caption using the pipeline
-        const result = await caption(imageArray);
-        
-        console.log('Caption result:', result);
-        
-        if (result && result[0] && result[0].generated_text) {
-            console.log('Generated caption:', result[0].generated_text);
-            return result[0].generated_text;
-        } else {
-            throw new Error('Invalid caption result format');
+        if (!API_URL || !API_KEY) {
+            console.log('Hugging Face API credentials not configured, using fallback');
+            return "Unable to generate image caption - API not configured";
         }
-    } catch (error) {
-        console.error('Error generating image caption:', error);
+
+        console.log('Using Hugging Face API...');
+        console.log('API URL:', API_URL);
+        console.log('API Key (first 10 chars):', API_KEY.substring(0, 10) + '...');
         
-        // Fallback to Hugging Face API if local fails
-        if (API_URL && API_KEY) {
-            console.log('Falling back to Hugging Face API...');
-            try {
-                const response = await axios.post(API_URL, imageBuffer, {
-                    headers: {
-                        'Authorization': API_KEY,
-                        'Content-Type': 'application/octet-stream',
-                    },
-                });
+        const response = await axios.post(API_URL, imageBuffer, {
+            headers: {
+                'Authorization': `Bearer ${API_KEY}`,
+                'Content-Type': 'application/octet-stream',
+            },
+            timeout: 30000, // 30 second timeout
+        });
 
-                console.log('Hugging Face API Response:', response.data);
+        console.log('Hugging Face API Response Status:', response.status);
+        console.log('Hugging Face API Response:', response.data);
 
-                if (response.data && response.data.length > 0 && response.data[0].generated_text) {
+        if (response.data) {
+            // Handle different response formats
+            if (Array.isArray(response.data) && response.data.length > 0) {
+                if (response.data[0].generated_text) {
                     return response.data[0].generated_text;
+                } else if (response.data[0].label) {
+                    return response.data[0].label;
                 }
-            } catch (apiError) {
-                console.error('Hugging Face API also failed:', apiError);
+            } else if (response.data.generated_text) {
+                return response.data.generated_text;
+            } else if (typeof response.data === 'string') {
+                return response.data;
             }
         }
         
-        // Return fallback message
+        console.log('Unexpected response format:', response.data);
+        return "Image caption generated successfully";
+        
+    } catch (error) {
+        console.error('Error querying image caption:', error.response?.status, error.response?.data || error.message);
+        
+        if (error.response?.status === 401) {
+            console.error('Authentication failed - check your Hugging Face API key');
+            return "Unable to generate caption - authentication failed";
+        } else if (error.response?.status === 503) {
+            console.error('Model is loading - try again in a few minutes');
+            return "Image analysis in progress - model loading";
+        } else if (error.response?.status === 429) {
+            console.error('Rate limit exceeded');
+            return "Caption service temporarily unavailable - rate limit";
+        }
+        
         return "Unable to generate image caption at this time";
     }
 }
@@ -103,11 +86,13 @@ async function uploadImageToBucket(file) {
                 contentType: file.mimetype,
             },
         });
+        
         const [url] = await bucketFile.getSignedUrl({
             action: 'read',
             expires: '03-01-2500',
         });
 
+        console.log('Image uploaded successfully to:', gcsFileName);
         return url;
     } catch (error) {
         console.error('Error uploading to bucket:', error);
@@ -121,16 +106,35 @@ export const submitPNR = async (req, res) => {
         const image = req.file;
 
         if (!image) {
-            return res.status(400).json({ error: 'Failed to get image from request' });
+            return res.status(400).json({ error: 'No image file provided' });
         }
 
-        console.log('Received PNR:', pnr);
-        console.log('Image provided in the request');
-        console.log('Image mimetype:', image.mimetype);
-        console.log('Image size:', image.size);
+        if (!pnr || !subject) {
+            return res.status(400).json({ error: 'PNR and subject are required' });
+        }
 
+        // Validate PNR format (should be 10 digits)
+        if (!/^\d{10}$/.test(pnr)) {
+            return res.status(400).json({ error: 'PNR must be exactly 10 digits' });
+        }
+
+        console.log('Processing complaint for PNR:', pnr);
+        console.log('Subject:', subject);
+        console.log('Image details:', {
+            originalname: image.originalname,
+            mimetype: image.mimetype,
+            size: image.size
+        });
+
+        // Upload image to Firebase Storage
+        console.log('Uploading image to Firebase Storage...');
         const imageUrl = await uploadImageToBucket(image);
+        console.log('Image uploaded successfully');
+
+        // Generate caption using Hugging Face API
+        console.log('Generating image caption...');
         const queryGenerated = await queryImageCaption(image.buffer);
+        console.log('Caption generated:', queryGenerated);
 
         const complaintId = uuidv4();
 
@@ -143,6 +147,8 @@ export const submitPNR = async (req, res) => {
             submittedAt: new Date().toISOString(),
         };
 
+        // Save to Firestore
+        console.log('Saving complaint to Firestore...');
         const complaintsRef = admin.firestore().collection('complaints').doc(pnr);
         await complaintsRef.set(
             {
@@ -151,15 +157,21 @@ export const submitPNR = async (req, res) => {
             { merge: true }
         );
 
+        console.log('Complaint saved successfully with ID:', complaintId);
+
         res.json({
             message: 'Complaint submitted successfully',
             pnr,
             complaintId,
             complaintData,
         });
+
     } catch (error) {
-        console.error('Error in submit-pnr:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('Error in submitPNR:', error);
+        res.status(500).json({ 
+            error: 'Internal server error', 
+            details: process.env.NODE_ENV === 'development' ? error.message : 'Please try again later'
+        });
     }
 };
 
@@ -171,20 +183,40 @@ export const getComplaints = async (req, res) => {
             return res.status(400).json({ error: 'PNR is required' });
         }
 
+        // Validate PNR format
+        if (!/^\d{10}$/.test(pnr)) {
+            return res.status(400).json({ error: 'PNR must be exactly 10 digits' });
+        }
+
+        console.log('Fetching complaints for PNR:', pnr);
+
         const doc = await admin.firestore().collection('complaints').doc(pnr).get();
 
         if (!doc.exists) {
-            return res.status(404).json({ error: 'PNR not found' });
+            return res.status(404).json({ 
+                error: 'No complaints found for this PNR',
+                pnr,
+                complaints: []
+            });
         }
 
         const pnrData = doc.data();
+        const complaints = pnrData.complaints || [];
+
+        console.log(`Found ${complaints.length} complaints for PNR ${pnr}`);
 
         res.json({
+            message: 'Complaints retrieved successfully',
             pnr,
-            complaints: pnrData.complaints,
+            totalComplaints: complaints.length,
+            complaints: complaints,
         });
+
     } catch (error) {
-        console.error('Error in get-complaints:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('Error in getComplaints:', error);
+        res.status(500).json({ 
+            error: 'Internal server error', 
+            details: process.env.NODE_ENV === 'development' ? error.message : 'Please try again later'
+        });
     }
 };
