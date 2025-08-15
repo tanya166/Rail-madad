@@ -2,71 +2,225 @@ import axios from 'axios';
 import admin from '../config/firebase.js';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
+import vision from '@google-cloud/vision';
 
 dotenv.config();
 
-const API_URL = process.env.HUGGING_FACE_API_URL;
-const API_KEY = process.env.HUGGING_FACE_API_KEY;
 const bucketName = process.env.GCS_BUCKET_NAME;
 
-async function queryImageCaption(imageBuffer) {
-    try {
-        console.log('Attempting to generate image caption...');
-        
-        if (!API_URL || !API_KEY) {
-            console.log('Hugging Face API credentials not configured, using fallback');
-            return "Unable to generate image caption - API not configured";
-        }
+// Initialize Google Vision client
+const visionClient = new vision.ImageAnnotatorClient({
+    keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
+});
 
-        console.log('Using Hugging Face API...');
-        console.log('API URL:', API_URL);
-        console.log('API Key (first 10 chars):', API_KEY.substring(0, 10) + '...');
+// LLM Configuration based on provider
+const LLM_CONFIG = {
+    provider: process.env.LLM_PROVIDER || 'openai', // 'openai' or 'groq'
+    openai: {
+        apiKey: process.env.OPENAI_API_KEY,
+        endpoint: 'https://api.openai.com/v1/chat/completions',
+        model: 'gpt-4o-mini', // Using mini as you requested earlier
+        maxTokens: 300,
+        temperature: 0.3
+    },
+    groq: {
+        apiKey: process.env.GROQ_API_KEY,
+        endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+        model: 'llama-3.1-8b-instant', // Fast Groq model
+        maxTokens: 300,
+        temperature: 0.3
+    }
+};
+
+async function analyzeImageWithGoogleVision(imageBuffer) {
+    try {
+        console.log('🔍 Starting Google Vision API analysis...');
         
-        const response = await axios.post(API_URL, imageBuffer, {
-            headers: {
-                'Authorization': `Bearer ${API_KEY}`,
-                'Content-Type': 'application/octet-stream',
-            },
-            timeout: 30000, // 30 second timeout
+        // Perform multiple types of detection
+        const [labelDetection] = await visionClient.labelDetection({
+            image: { content: imageBuffer }
+        });
+        
+        const [objectDetection] = await visionClient.objectLocalization({
+            image: { content: imageBuffer }
+        });
+        
+        const [textDetection] = await visionClient.textDetection({
+            image: { content: imageBuffer }
+        });
+        
+        // Optional: Detect landmarks, faces, etc.
+        const [landmarkDetection] = await visionClient.landmarkDetection({
+            image: { content: imageBuffer }
         });
 
-        console.log('Hugging Face API Response Status:', response.status);
-        console.log('Hugging Face API Response:', response.data);
+        console.log('✅ Google Vision API analysis completed');
 
-        if (response.data) {
-            // Handle different response formats
-            if (Array.isArray(response.data) && response.data.length > 0) {
-                if (response.data[0].generated_text) {
-                    return response.data[0].generated_text;
-                } else if (response.data[0].label) {
-                    return response.data[0].label;
-                }
-            } else if (response.data.generated_text) {
-                return response.data.generated_text;
-            } else if (typeof response.data === 'string') {
-                return response.data;
-            }
-        }
-        
-        console.log('Unexpected response format:', response.data);
-        return "Image caption generated successfully";
-        
+        // Process the results
+        const visionData = {
+            labels: labelDetection.labelAnnotations || [],
+            objects: objectDetection.localizedObjectAnnotations || [],
+            text: textDetection.textAnnotations || [],
+            landmarks: landmarkDetection.landmarkAnnotations || []
+        };
+
+        console.log('📊 Vision API Results:', {
+            labelsFound: visionData.labels.length,
+            objectsFound: visionData.objects.length,
+            textFound: visionData.text.length > 0,
+            landmarksFound: visionData.landmarks.length
+        });
+
+        return visionData;
+
     } catch (error) {
-        console.error('Error querying image caption:', error.response?.status, error.response?.data || error.message);
+        console.error('❌ Error with Google Vision API:', error);
+        throw error;
+    }
+}
+
+function formatVisionDataForLLM(visionData, subject) {
+    let visionText = "GOOGLE VISION API ANALYSIS RESULTS:\n\n";
+    
+    // Add labels with confidence scores
+    if (visionData.labels.length > 0) {
+        visionText += "DETECTED LABELS:\n";
+        visionData.labels.slice(0, 10).forEach(label => {
+            visionText += `- ${label.description} (confidence: ${(label.score * 100).toFixed(1)}%)\n`;
+        });
+        visionText += "\n";
+    }
+    
+    // Add detected objects
+    if (visionData.objects.length > 0) {
+        visionText += "DETECTED OBJECTS:\n";
+        visionData.objects.slice(0, 8).forEach(object => {
+            visionText += `- ${object.name} (confidence: ${(object.score * 100).toFixed(1)}%)\n`;
+        });
+        visionText += "\n";
+    }
+    
+    // Add detected text
+    if (visionData.text.length > 0) {
+        visionText += "DETECTED TEXT:\n";
+        const fullText = visionData.text[0]?.description || '';
+        if (fullText.length > 200) {
+            visionText += fullText.substring(0, 200) + "...\n\n";
+        } else if (fullText) {
+            visionText += fullText + "\n\n";
+        }
+    }
+    
+    // Add landmarks if any
+    if (visionData.landmarks.length > 0) {
+        visionText += "DETECTED LANDMARKS:\n";
+        visionData.landmarks.forEach(landmark => {
+            visionText += `- ${landmark.description}\n`;
+        });
+        visionText += "\n";
+    }
+    
+    return visionText;
+}
+
+async function generateDescriptionWithLLM(visionData, subject) {
+    try {
+        const provider = LLM_CONFIG.provider;
+        const config = LLM_CONFIG[provider];
         
-        if (error.response?.status === 401) {
-            console.error('Authentication failed - check your Hugging Face API key');
-            return "Unable to generate caption - authentication failed";
-        } else if (error.response?.status === 503) {
-            console.error('Model is loading - try again in a few minutes');
-            return "Image analysis in progress - model loading";
-        } else if (error.response?.status === 429) {
-            console.error('Rate limit exceeded');
-            return "Caption service temporarily unavailable - rate limit";
+        console.log(`🤖 Generating description using ${provider.toUpperCase()} LLM...`);
+        
+        if (!config.apiKey) {
+            throw new Error(`${provider.toUpperCase()} API key not configured`);
+        }
+
+        const visionText = formatVisionDataForLLM(visionData, subject);
+        
+        const prompt = `You are an expert railway maintenance analyst. Based on the Google Vision API analysis results below, generate a detailed, professional description of what the image shows, with special focus on any potential maintenance issues, damage, or problems.
+
+USER'S COMPLAINT SUBJECT: "${subject}"
+
+${visionText}
+
+INSTRUCTIONS:
+1. Create a clear, descriptive sentence starting with "The image shows"
+2. Focus on railway-related elements, infrastructure, and any visible issues
+3. If damage, wear, or maintenance issues are detected, describe them specifically
+4. Mention the most relevant objects and conditions
+5. Keep the description professional and factual
+6. If the user's complaint subject mentions specific issues, look for evidence in the vision data
+7. Maximum 2-3 sentences
+
+Generate the description:`;
+
+        const response = await axios.post(config.endpoint, {
+            model: config.model,
+            messages: [
+                {
+                    role: "system",
+                    content: "You are a professional railway maintenance analyst who creates clear, concise descriptions of railway infrastructure and identifies potential maintenance issues."
+                },
+                {
+                    role: "user", 
+                    content: prompt
+                }
+            ],
+            max_tokens: config.maxTokens,
+            temperature: config.temperature
+        }, {
+            headers: {
+                'Authorization': `Bearer ${config.apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 30000
+        });
+
+        const description = response.data.choices[0]?.message?.content?.trim();
+        
+        if (!description) {
+            throw new Error('No description generated by LLM');
+        }
+
+        console.log(`✅ ${provider.toUpperCase()} generated description successfully`);
+        console.log('📝 Generated description:', description.substring(0, 150) + '...');
+        
+        return description;
+
+    } catch (error) {
+        console.error(`❌ Error generating description with ${LLM_CONFIG.provider}:`, error.message);
+        
+        // Fallback to basic description from vision data
+        return generateFallbackFromVision(visionData, subject);
+    }
+}
+
+function generateFallbackFromVision(visionData, subject) {
+    console.log('🔄 Generating fallback description from vision data...');
+    
+    let description = "The image shows ";
+    
+    // Use top labels to create basic description
+    if (visionData.labels.length > 0) {
+        const topLabels = visionData.labels.slice(0, 3).map(label => label.description.toLowerCase());
+        
+        if (topLabels.some(label => label.includes('train') || label.includes('railway') || label.includes('station'))) {
+            description += "a railway environment with ";
         }
         
-        return "Unable to generate image caption at this time";
+        description += topLabels.join(', ');
+        
+        // Add objects if available
+        if (visionData.objects.length > 0) {
+            const topObjects = visionData.objects.slice(0, 2).map(obj => obj.name.toLowerCase());
+            description += ` including ${topObjects.join(' and ')}`;
+        }
+        
+        description += `. Manual inspection recommended for the reported issue: "${subject}".`;
+    } else {
+        description += `a scene related to the complaint: "${subject}". Google Vision analysis completed but detailed assessment requires manual inspection.`;
     }
+    
+    return description;
 }
 
 async function uploadImageToBucket(file) {
@@ -92,10 +246,10 @@ async function uploadImageToBucket(file) {
             expires: '03-01-2500',
         });
 
-        console.log('Image uploaded successfully to:', gcsFileName);
+        console.log('📁 Image uploaded successfully to:', gcsFileName);
         return url;
     } catch (error) {
-        console.error('Error uploading to bucket:', error);
+        console.error('❌ Error uploading to bucket:', error);
         throw error;
     }
 }
@@ -118,23 +272,40 @@ export const submitPNR = async (req, res) => {
             return res.status(400).json({ error: 'PNR must be exactly 10 digits' });
         }
 
-        console.log('Processing complaint for PNR:', pnr);
-        console.log('Subject:', subject);
-        console.log('Image details:', {
+        // Validate image size (Google Vision supports up to 20MB)
+        if (image.size > 20 * 1024 * 1024) {
+            return res.status(400).json({ error: 'Image size must be less than 20MB' });
+        }
+
+        // Validate image type
+        const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp', 'image/tiff'];
+        if (!allowedTypes.includes(image.mimetype)) {
+            return res.status(400).json({ error: 'Unsupported image format' });
+        }
+
+        console.log('🎯 Processing complaint with Google Vision + LLM for PNR:', pnr);
+        console.log('📝 Subject:', subject);
+        console.log('🖼️ Image details:', {
             originalname: image.originalname,
             mimetype: image.mimetype,
-            size: image.size
+            size: `${(image.size / 1024 / 1024).toFixed(2)}MB`
         });
+        console.log('🤖 Using LLM Provider:', LLM_CONFIG.provider.toUpperCase());
 
         // Upload image to Firebase Storage
-        console.log('Uploading image to Firebase Storage...');
+        console.log('📤 Uploading image to Firebase Storage...');
         const imageUrl = await uploadImageToBucket(image);
-        console.log('Image uploaded successfully');
+        console.log('✅ Image uploaded successfully');
 
-        // Generate caption using Hugging Face API
-        console.log('Generating image caption...');
-        const queryGenerated = await queryImageCaption(image.buffer);
-        console.log('Caption generated:', queryGenerated);
+        // Analyze image with Google Vision API
+        console.log('👁️ Analyzing image with Google Vision API...');
+        const visionData = await analyzeImageWithGoogleVision(image.buffer);
+        console.log('✅ Google Vision analysis completed');
+
+        // Generate description using LLM based on vision results
+        console.log('🤖 Generating description with LLM...');
+        const queryGenerated = await generateDescriptionWithLLM(visionData, subject);
+        console.log('✅ Description generation completed');
 
         const complaintId = uuidv4();
 
@@ -145,10 +316,17 @@ export const submitPNR = async (req, res) => {
             queryGenerated,
             status: 'Pending',
             submittedAt: new Date().toISOString(),
+            analysisMethod: `Google Vision API + ${LLM_CONFIG.provider.toUpperCase()} LLM`,
+            visionResults: {
+                labelsCount: visionData.labels.length,
+                objectsCount: visionData.objects.length,
+                hasText: visionData.text.length > 0,
+                landmarksCount: visionData.landmarks.length
+            }
         };
 
         // Save to Firestore
-        console.log('Saving complaint to Firestore...');
+        console.log('💾 Saving complaint to Firestore...');
         const complaintsRef = admin.firestore().collection('complaints').doc(pnr);
         await complaintsRef.set(
             {
@@ -157,17 +335,18 @@ export const submitPNR = async (req, res) => {
             { merge: true }
         );
 
-        console.log('Complaint saved successfully with ID:', complaintId);
+        console.log('✅ Complaint saved successfully with ID:', complaintId);
+        console.log('🎉 Google Vision + LLM analysis pipeline completed');
 
         res.json({
-            message: 'Complaint submitted successfully',
+            message: `Complaint submitted successfully with Google Vision + ${LLM_CONFIG.provider.toUpperCase()} analysis`,
             pnr,
             complaintId,
             complaintData,
         });
 
     } catch (error) {
-        console.error('Error in submitPNR:', error);
+        console.error('❌ Error in submitPNR:', error);
         res.status(500).json({ 
             error: 'Internal server error', 
             details: process.env.NODE_ENV === 'development' ? error.message : 'Please try again later'
@@ -188,7 +367,7 @@ export const getComplaints = async (req, res) => {
             return res.status(400).json({ error: 'PNR must be exactly 10 digits' });
         }
 
-        console.log('Fetching complaints for PNR:', pnr);
+        console.log('📋 Fetching complaints for PNR:', pnr);
 
         const doc = await admin.firestore().collection('complaints').doc(pnr).get();
 
@@ -203,17 +382,32 @@ export const getComplaints = async (req, res) => {
         const pnrData = doc.data();
         const complaints = pnrData.complaints || [];
 
-        console.log(`Found ${complaints.length} complaints for PNR ${pnr}`);
+        console.log(`📊 Found ${complaints.length} complaints for PNR ${pnr}`);
+        
+        // Log analysis methods used
+        const visionComplaints = complaints.filter(c => c.analysisMethod?.includes('Vision'));
+        const llmBreakdown = {
+            openai: complaints.filter(c => c.analysisMethod?.includes('OPENAI')).length,
+            groq: complaints.filter(c => c.analysisMethod?.includes('GROQ')).length,
+            huggingface: complaints.filter(c => c.analysisMethod?.includes('Hugging')).length
+        };
+        
+        console.log(`👁️ ${visionComplaints.length} complaints analyzed with Google Vision`);
+        console.log('🤖 LLM usage breakdown:', llmBreakdown);
 
         res.json({
             message: 'Complaints retrieved successfully',
             pnr,
             totalComplaints: complaints.length,
             complaints: complaints,
+            analysisBreakdown: {
+                googleVision: visionComplaints.length,
+                llmProviders: llmBreakdown
+            }
         });
 
     } catch (error) {
-        console.error('Error in getComplaints:', error);
+        console.error('❌ Error in getComplaints:', error);
         res.status(500).json({ 
             error: 'Internal server error', 
             details: process.env.NODE_ENV === 'development' ? error.message : 'Please try again later'
