@@ -6,6 +6,7 @@ import complaintImage from '../assets/complaint-image.png';
 function ComplaintForm() {
   const [pnr, setPnr] = useState('');
   const [subject, setSubject] = useState('');
+  const [station, setStation] = useState('');
   const [media, setMedia] = useState(null);
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -24,6 +25,10 @@ function ComplaintForm() {
 
     if (!subject || subject.trim().length === 0) {
       formErrors.subject = 'Subject is required';
+    }
+
+    if (!station || station.trim().length === 0) {
+      formErrors.station = 'Station location is required';
     }
 
     if (!media) {
@@ -63,11 +68,13 @@ function ComplaintForm() {
       const formData = new FormData();
       formData.append('pnr', pnr);
       formData.append('subject', subject.trim());
+      formData.append('station', station.trim());
       formData.append('image', media); // The backend expects 'image' as the field name
 
       console.log('Submitting complaint:', {
         pnr,
         subject: subject.trim(),
+        station: station.trim(),
         fileName: media.name,
         fileSize: `${(media.size / 1024 / 1024).toFixed(2)}MB`
       });
@@ -90,6 +97,7 @@ function ComplaintForm() {
       setTimeout(() => {
         setPnr('');
         setSubject('');
+        setStation('');
         setMedia(null);
         setSubmitSuccess(false);
         // Reset file input
@@ -130,6 +138,11 @@ function ComplaintForm() {
       // Clear any previous media error
       if (errors.media) {
         setErrors(prev => ({ ...prev, media: '' }));
+      }
+      
+      // Clear any previous station error
+      if (errors.station) {
+        setErrors(prev => ({ ...prev, station: '' }));
       }
     }
   };
@@ -177,6 +190,19 @@ function ComplaintForm() {
               disabled={isSubmitting}
             />
             {errors.subject && <span className="error red-text">{errors.subject}</span>}
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="station">Station/Location</label>
+            <input
+              type="text"
+              id="station"
+              placeholder="Enter station name or location"
+              value={station}
+              onChange={(e) => setStation(e.target.value)}
+              disabled={isSubmitting}
+            />
+            {errors.station && <span className="error red-text">{errors.station}</span>}
           </div>
 
           <div className="form-group media-upload">

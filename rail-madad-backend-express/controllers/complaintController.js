@@ -79,7 +79,7 @@ async function analyzeImageWithGoogleVision(imageBuffer) {
     }
 }
 
-function formatVisionDataForLLM(visionData, subject) {
+function formatVisionDataForLLM(visionData, subject, station) {
     let visionText = "GOOGLE VISION API ANALYSIS RESULTS:\n\n";
     
     // Add labels with confidence scores
@@ -123,7 +123,7 @@ function formatVisionDataForLLM(visionData, subject) {
     return visionText;
 }
 
-async function generateDescriptionWithLLM(visionData, subject) {
+async function generateDescriptionWithLLM(visionData, subject, station) {
     try {
         const provider = LLM_CONFIG.provider;
         const config = LLM_CONFIG[provider];
@@ -134,22 +134,25 @@ async function generateDescriptionWithLLM(visionData, subject) {
             throw new Error(`${provider.toUpperCase()} API key not configured`);
         }
 
-        const visionText = formatVisionDataForLLM(visionData, subject);
+        const visionText = formatVisionDataForLLM(visionData, subject, station);
         
         const prompt = `You are an expert railway maintenance analyst. Based on the Google Vision API analysis results below, generate a detailed, professional description of what the image shows, with special focus on any potential maintenance issues, damage, or problems.
 
 USER'S COMPLAINT SUBJECT: "${subject}"
+STATION/LOCATION: "${station}"
 
 ${visionText}
 
 INSTRUCTIONS:
 1. Create a clear, descriptive sentence starting with "The image shows"
-2. Focus on railway-related elements, infrastructure, and any visible issues
-3. If damage, wear, or maintenance issues are detected, describe them specifically
-4. Mention the most relevant objects and conditions
-5. Keep the description professional and factual
-6. If the user's complaint subject mentions specific issues, look for evidence in the vision data
-7. Maximum 2-3 sentences
+2. Include the station/location context in your analysis when relevant
+3. Focus on railway-related elements, infrastructure, and any visible issues
+4. If damage, wear, or maintenance issues are detected, describe them specifically
+5. Mention the most relevant objects and conditions
+6. Keep the description professional and factual
+7. If the user's complaint subject mentions specific issues, look for evidence in the vision data
+8. Consider the station location when analyzing the type of infrastructure or issues
+9. Maximum 2-3 sentences
 
 Generate the description:`;
 
@@ -158,7 +161,7 @@ Generate the description:`;
             messages: [
                 {
                     role: "system",
-                    content: "You are a professional railway maintenance analyst who creates clear, concise descriptions of railway infrastructure and identifies potential maintenance issues."
+                    content: "You are a professional railway maintenance analyst who creates clear, concise descriptions of railway infrastructure and identifies potential maintenance issues. You consider location context when analyzing railway problems."
                 },
                 {
                     role: "user", 
@@ -190,11 +193,11 @@ Generate the description:`;
         console.error(`❌ Error generating description with ${LLM_CONFIG.provider}:`, error.message);
         
         // Fallback to basic description from vision data
-        return generateFallbackFromVision(visionData, subject);
+        return generateFallbackFromVision(visionData, subject, station);
     }
 }
 
-function generateFallbackFromVision(visionData, subject) {
+function generateFallbackFromVision(visionData, subject, station) {
     console.log('🔄 Generating fallback description from vision data...');
     
     let description = "The image shows ";
@@ -204,7 +207,9 @@ function generateFallbackFromVision(visionData, subject) {
         const topLabels = visionData.labels.slice(0, 3).map(label => label.description.toLowerCase());
         
         if (topLabels.some(label => label.includes('train') || label.includes('railway') || label.includes('station'))) {
-            description += "a railway environment with ";
+            description += `a railway environment at ${station} with `;
+        } else {
+            description += `a scene at ${station} with `;
         }
         
         description += topLabels.join(', ');
@@ -217,7 +222,7 @@ function generateFallbackFromVision(visionData, subject) {
         
         description += `. Manual inspection recommended for the reported issue: "${subject}".`;
     } else {
-        description += `a scene related to the complaint: "${subject}". Google Vision analysis completed but detailed assessment requires manual inspection.`;
+        description += `a scene at ${station} related to the complaint: "${subject}". Google Vision analysis completed but detailed assessment requires manual inspection.`;
     }
     
     return description;
@@ -256,15 +261,15 @@ async function uploadImageToBucket(file) {
 
 export const submitPNR = async (req, res) => {
     try {
-        const { pnr, subject } = req.body;
+        const { pnr, subject, station } = req.body;
         const image = req.file;
 
         if (!image) {
             return res.status(400).json({ error: 'No image file provided' });
         }
 
-        if (!pnr || !subject) {
-            return res.status(400).json({ error: 'PNR and subject are required' });
+        if (!pnr || !subject || !station) {
+            return res.status(400).json({ error: 'PNR, subject, and station are required' });
         }
 
         // Validate PNR format (should be 10 digits)
@@ -285,6 +290,7 @@ export const submitPNR = async (req, res) => {
 
         console.log('🎯 Processing complaint with Google Vision + LLM for PNR:', pnr);
         console.log('📝 Subject:', subject);
+        console.log('📍 Station:', station);
         console.log('🖼️ Image details:', {
             originalname: image.originalname,
             mimetype: image.mimetype,
@@ -304,7 +310,7 @@ export const submitPNR = async (req, res) => {
 
         // Generate description using LLM based on vision results
         console.log('🤖 Generating description with LLM...');
-        const queryGenerated = await generateDescriptionWithLLM(visionData, subject);
+        const queryGenerated = await generateDescriptionWithLLM(visionData, subject, station);
         console.log('✅ Description generation completed');
 
         const complaintId = uuidv4();
@@ -312,6 +318,7 @@ export const submitPNR = async (req, res) => {
         const complaintData = {
             id: complaintId,
             subject,
+            station,
             imageUrl,
             queryGenerated,
             status: 'Pending',
